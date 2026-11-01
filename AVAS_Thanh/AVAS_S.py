@@ -1,7 +1,6 @@
 import sys
 import os
 import io
-import shutil
 import collections
 import numpy as np
 from scipy.io import wavfile
@@ -9,7 +8,8 @@ import sounddevice as sd
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
-    QSlider, QLabel, QGroupBox, QComboBox
+    QSlider, QLabel, QGroupBox, QComboBox, QPushButton,
+    QFileDialog, QMessageBox
 )
 from PyQt5.QtCore import Qt, QTimer
 import pyqtgraph as pg
@@ -20,11 +20,6 @@ if hasattr(sys.stdout, 'buffer'):
 
 # --- THÔNG SỐ CẤU HÌNH AVAS ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-INPUT_WAV = os.path.join(SCRIPT_DIR, "avas_base_asset.wav")
-if not os.path.exists(INPUT_WAV):
-    INPUT_WAV = "avas_base_asset.wav"
-
-SIM_WAV = os.path.join(SCRIPT_DIR, "avas_sim_asset.wav")
 
 BASE_FREQ = 160.0    # Tần số gốc của file WAV nền (Hz)
 MIN_FREQ = 160.0     # Tần số tại 1 km/h (Âm trầm mượt, đầm xe)
@@ -61,86 +56,29 @@ def get_a_weighting_offsets(freqs):
     return a_db
 
 
-def generate_similar_avas_wav(ref_wav_path, out_wav_path):
-    """
-    Tổng hợp âm thanh AVAS phong cách Kia EV6 VESS ("Spaceship V12") phân tích từ
-    video https://www.youtube.com/shorts/4Vaurco0vC0 kết hợp nền f0 = 160 Hz của WAV gốc:
-    - Lớp 1 (Sub-Harmonic V12 Rumble): 80 Hz (0.50*f0) và 120 Hz (0.75*f0) tạo tiếng gầm trầm uy lực.
-    - Lớp 2 (Futuristic Major Triad Chord): 160 Hz (1.0*f0), 200 Hz (1.25*f0 quãng 3 trưởng),
-      240 Hz (1.50*f0 quãng 5 đúng chủ đạo), 320 Hz (2.0*f0), 400 Hz (2.5*f0), 480 Hz (3.0*f0).
-    - Lớp 3 (Spaceship Turbine & Inverter Whine): 640 Hz, 800 Hz, 960 Hz và 1280 Hz.
-    - Hiệu ứng Dual-Motor Chorus Shimmer (+-0.333 Hz) và pha Schroeder giúp âm thanh mượt,
-      sống động như động cơ điện kép thực tế và đạt chuẩn UN ECE R138.
-    """
-    sr, raw_data = wavfile.read(ref_wav_path)
-    if len(raw_data.shape) > 1:
-        raw_data = raw_data[:, 0]
-    n = len(raw_data)
-    df = sr / float(n)
-    sim_spec = np.zeros(n // 2 + 1, dtype=complex)
-
-    kia_ev6_harmonics = [
-        (80.0,   0.26),  # 0.50 * f0: Âm trầm V12 sub-bass (70-96 Hz trong video)
-        (120.0,  0.22),  # 0.75 * f0: Âm gầm quãng 5 trầm (114-136 Hz trong video)
-        (160.0,  0.38),  # 1.00 * f0: Tần số cơ bản [Dải 160 Hz R138]
-        (200.0,  0.30),  # 1.25 * f0: Quãng 3 trưởng đặc trưng (200-226 Hz) [Dải 200 Hz R138]
-        (240.0,  0.42),  # 1.50 * f0: Đỉnh cộng hưởng quãng 5 đúng (240-276 Hz) [Dải 250 Hz R138]
-        (320.0,  0.24),  # 2.00 * f0: Hài âm bậc 2 (332-364 Hz) [Dải 315 Hz R138]
-        (400.0,  0.18),  # 2.50 * f0: Hài âm quãng 10 trưởng (400-460 Hz) [Dải 400 Hz R138]
-        (480.0,  0.13),  # 3.00 * f0: Hài âm bậc 3 (468-510 Hz) [Dải 500 Hz R138]
-        (640.0,  0.07),  # 4.00 * f0: Hài âm bậc 4 [Dải 630 Hz R138]
-        (800.0,  0.045), # 5.00 * f0: Hài âm bậc 5 [Dải 800 Hz R138]
-        (960.0,  0.030), # 6.00 * f0: Tiếng rít biến tần (938-1086 Hz) [Dải 1000 Hz R138]
-        (1280.0, 0.022), # 8.00 * f0: Âm sắc phi thuyền bậc cao (1280 Hz) [Dải 1250 Hz R138]
-    ]
-
-    num_tones = len(kia_ev6_harmonics)
-    for idx, (freq, amp) in enumerate(kia_ev6_harmonics):
-        k_bin = int(round(freq / df))
-        if 0 < k_bin < len(sim_spec):
-            phase = -np.pi * idx * (idx + 1) / num_tones
-            sim_spec[k_bin] += amp * (n / 2) * np.exp(1j * phase)
-            if 160.0 <= freq <= 640.0 and (k_bin - 2) > 0 and (k_bin + 2) < len(sim_spec):
-                shimmer_amp = amp * 0.08
-                sim_spec[k_bin - 2] += shimmer_amp * (n / 2) * np.exp(1j * (phase + 0.7))
-                sim_spec[k_bin + 2] += shimmer_amp * (n / 2) * np.exp(1j * (phase - 0.7))
-
-    sim_signal = np.fft.irfft(sim_spec, n=n)
-    max_val = np.max(np.abs(sim_signal))
-    if max_val > 1e-9:
-        sim_signal = sim_signal / max_val * 0.85
-
-    pcm_int16 = np.clip(np.round(sim_signal * 32767.0), -32768, 32767).astype(np.int16)
-    wavfile.write(out_wav_path, sr, pcm_int16)
-
-    return sim_signal.astype(np.float32)
+def discover_wav_files(root_dir):
+    """Quét toàn bộ các file .wav hiện có trong thư mục gốc và các thư mục Profile con"""
+    wav_files = []
+    for dirpath, _, filenames in os.walk(root_dir):
+        for fname in sorted(filenames):
+            if fname.lower().endswith(".wav"):
+                wav_files.append(os.path.join(dirpath, fname))
+    return wav_files
 
 
 class AVASAudioEngine:
-    def __init__(self, base_wav_path, sim_wav_path=SIM_WAV):
-        self.base_wav_path = base_wav_path
-        self.sim_wav_path = sim_wav_path
+    def __init__(self, initial_wav_path=None):
+        self.current_wav_path = None
+        self.sample_rate = 44100
+        self.sound_mode = 0  # 0: Original WAV, 1: Smooth DSP Filter
 
-        self.sample_rate, data = wavfile.read(base_wav_path)
-        if len(data.shape) > 1:
-            data = data[:, 0]
-        
-        if data.dtype == np.int16:
-            raw_samples = data.astype(np.float64) / 32768.0
-        else:
-            raw_samples = data.astype(np.float64)
-
-        # Lưu 3 nguồn âm thanh để người dùng có thể đối chiếu trực tiếp trên GUI:
-        # 0: File WAV mới (avas_sim_asset.wav) được tạo dựa trên WAV gốc
-        # 1: File WAV gốc (avas_base_asset.wav) qua bộ lọc khử nhiễu DSP
-        # 2: File WAV gốc nguyên bản (Raw)
-        self.raw_base_samples = raw_samples.astype(np.float32)
-        self.dsp_base_samples = self._preprocess_smooth_audio(raw_samples)
-        self.sim_samples = generate_similar_avas_wav(base_wav_path, sim_wav_path)
-
-        # Mặc định sử dụng âm thanh mô phỏng AVAS mới (avas_sim_asset.wav)
-        self.base_samples = self.sim_samples
+        # Khởi tạo buffer mặc định (im lặng) nếu chưa nạp file WAV
+        default_len = self.sample_rate * 6
+        self.raw_base_samples = np.zeros(default_len, dtype=np.float32)
+        self.dsp_base_samples = np.zeros(default_len, dtype=np.float32)
+        self.base_samples = self.raw_base_samples
         self.sample_len = len(self.base_samples)
+
         self.read_pointer = 0.0
         self.current_speed_int = 0  # Số nguyên (0 - 20 km/h)
 
@@ -154,7 +92,21 @@ class AVASAudioEngine:
         
         self.viz_buffer_size = 8192
         self.viz_buffer = np.zeros(self.viz_buffer_size, dtype=np.float32)
+        self.stream = None
 
+        if initial_wav_path and os.path.exists(initial_wav_path):
+            self.load_wav_file(initial_wav_path)
+        else:
+            self._init_stream()
+
+    def _init_stream(self):
+        was_active = False
+        if self.stream is not None:
+            was_active = self.stream.active
+            self.stream.stop()
+            self.stream.close()
+
+        self.smooth_alpha = 1.0 - np.exp(-1.0 / (0.045 * self.sample_rate))
         self.stream = sd.OutputStream(
             samplerate=self.sample_rate,
             blocksize=2048,
@@ -163,27 +115,62 @@ class AVASAudioEngine:
             latency='high',
             callback=self._audio_callback
         )
+        if was_active:
+            self.stream.start()
+
+    def load_wav_file(self, wav_path):
+        """Nạp file .wav do người dùng chọn/import và cập nhật bộ đệm âm thanh trực tiếp"""
+        new_sr, data = wavfile.read(wav_path)
+        if len(data.shape) > 1:
+            data = data[:, 0]
+
+        if data.dtype == np.int16:
+            raw_samples = data.astype(np.float64) / 32768.0
+        elif data.dtype == np.int32:
+            raw_samples = data.astype(np.float64) / 2147483648.0
+        elif data.dtype == np.uint8:
+            raw_samples = (data.astype(np.float64) - 128.0) / 128.0
+        else:
+            raw_samples = data.astype(np.float64)
+
+        sr_changed = (new_sr != self.sample_rate) or (self.stream is None)
+        self.sample_rate = int(new_sr)
+        self.current_wav_path = os.path.abspath(wav_path)
+
+        raw_f32 = raw_samples.astype(np.float32)
+        dsp_f32 = self._preprocess_smooth_audio(raw_samples)
+
+        self.raw_base_samples = raw_f32
+        self.dsp_base_samples = dsp_f32
+        self.read_pointer = 0.0
+        self.set_sound_mode(self.sound_mode)
+
+        if sr_changed:
+            self._init_stream()
 
     def set_sound_mode(self, mode_index):
-        """Chuyển đổi nguồn âm thanh mượt mà khi đang chạy"""
-        if mode_index == 0:
-            self.base_samples = self.sim_samples
-        elif mode_index == 1:
+        """Chuyển đổi chế độ xử lý âm thanh mượt mà khi đang chạy (0: WAV gốc, 1: Khử nhiễu DSP)"""
+        self.sound_mode = int(mode_index)
+        if self.sound_mode == 1:
             self.base_samples = self.dsp_base_samples
         else:
             self.base_samples = self.raw_base_samples
-        self.sample_len = len(self.base_samples)
+        self.sample_len = max(len(self.base_samples), 1)
+        self.read_pointer = self.read_pointer % self.sample_len
 
     def _preprocess_smooth_audio(self, raw_samples):
         """
         Phương pháp DSP làm mượt âm thanh trực tiếp từ dữ liệu WAV đầu vào (không sửa file .wav):
-        1. Spectral Gating (FFT): Loại bỏ toàn bộ 136 dải tần nhiễu biến điệu bậc cao (IMD sand/noise)
+        1. Spectral Gating (FFT): Loại bỏ toàn bộ dải tần nhiễu biến điệu bậc cao (IMD sand/noise)
            sinh ra do bão hòa phi tuyến trong file WAV gốc.
         2. Harmonic Phase-Locking & Schroeder Phase: Đồng bộ các tần số lệch pha (như 250Hz, 315Hz)
            về lưới hài âm chuẩn (bội số của BASE_FREQ/2 = 80Hz) để triệt tiêu hiện tượng phách (beating/roughness).
         3. Warm Acoustic Low-Pass Rolloff: Làm dịu dải tần cao (>350Hz) giúp âm thanh êm, ấm và mượt.
         """
         n = len(raw_samples)
+        if n == 0:
+            return np.zeros(1, dtype=np.float32)
+
         spec = np.fft.rfft(raw_samples)
         freqs = np.fft.rfftfreq(n, 1.0 / self.sample_rate)
         mag = np.abs(spec) / (n / 2)
@@ -215,7 +202,7 @@ class AVASAudioEngine:
         return clean_signal.astype(np.float32)
 
     def start(self):
-        if not self.stream.active:
+        if self.stream is not None and not self.stream.active:
             self.stream.start()
 
     def set_speed(self, speed_kmh_int):
@@ -249,17 +236,18 @@ class AVASAudioEngine:
         self.current_pitch_ratio = float(pitches[-1])
 
         # Cộng dồn pha liên tục (Phase Accumulator)
-        pointers = (self.read_pointer + np.cumsum(pitches, dtype=np.float64)) % self.sample_len
+        active_samples = self.base_samples
+        n_len = len(active_samples)
+        pointers = (self.read_pointer + np.cumsum(pitches, dtype=np.float64)) % n_len
         self.read_pointer = float(pointers[-1])
 
         # Nội suy bậc 3 Catmull-Rom (4-point Cubic Interpolation) giúp âm thanh mượt tuyệt đối
         idx1 = pointers.astype(np.int64)
         frac = (pointers - idx1).astype(np.float32)
-        idx0 = (idx1 - 1) % self.sample_len
-        idx2 = (idx1 + 1) % self.sample_len
-        idx3 = (idx1 + 2) % self.sample_len
+        idx0 = (idx1 - 1) % n_len
+        idx2 = (idx1 + 1) % n_len
+        idx3 = (idx1 + 2) % n_len
 
-        active_samples = self.base_samples
         y0 = active_samples[idx0]
         y1 = active_samples[idx1]
         y2 = active_samples[idx2]
@@ -283,27 +271,19 @@ class AVASAudioEngine:
         return self.viz_buffer.copy()
 
     def stop(self):
-        self.stream.stop()
-        self.stream.close()
+        if self.stream is not None:
+            self.stream.stop()
+            self.stream.close()
 
 
 class AVASSimulatorGUI(QWidget):
-    def __init__(self, audio_engine):
+    def __init__(self, audio_engine, available_wavs=None):
         super().__init__()
         self.engine = audio_engine
+        self.available_wavs = list(available_wavs) if available_wavs else []
         self.fft_size = 4096
-        self.sample_rate = self.engine.sample_rate
-        
-        self.fft_freqs = np.fft.rfftfreq(self.fft_size, 1.0 / self.sample_rate)
-        self.a_weighting = get_a_weighting_offsets(self.fft_freqs)
         self.hann_window = np.hanning(self.fft_size)
-
-        self.octave_bounds = []
-        for fc in OCTAVE_CENTER_FREQS:
-            f_lower = fc * (2.0 ** (-1.0 / 6.0))
-            f_upper = fc * (2.0 ** (1.0 / 6.0))
-            idx = np.where((self.fft_freqs >= f_lower) & (self.fft_freqs < f_upper))[0]
-            self.octave_bounds.append(idx)
+        self._update_fft_grid()
 
         self.init_ui()
 
@@ -312,29 +292,77 @@ class AVASSimulatorGUI(QWidget):
         self.timer.start(33)
         QTimer.singleShot(50, self.engine.start)
 
+    def _update_fft_grid(self):
+        self.sample_rate = self.engine.sample_rate
+        self.fft_freqs = np.fft.rfftfreq(self.fft_size, 1.0 / self.sample_rate)
+        self.a_weighting = get_a_weighting_offsets(self.fft_freqs)
+
+        self.octave_bounds = []
+        for fc in OCTAVE_CENTER_FREQS:
+            f_lower = fc * (2.0 ** (-1.0 / 6.0))
+            f_upper = fc * (2.0 ** (1.0 / 6.0))
+            idx = np.where((self.fft_freqs >= f_lower) & (self.fft_freqs < f_upper))[0]
+            self.octave_bounds.append(idx)
+
+    def _format_wav_label(self, wav_path):
+        try:
+            rel = os.path.relpath(wav_path, SCRIPT_DIR)
+            if not rel.startswith(".."):
+                return rel.replace("\\", "/")
+        except ValueError:
+            pass
+        return wav_path
+
     def init_ui(self):
         self.setWindowTitle("ECE R138 AVAS Analyzer - (0 - 20 km/h Integer Mode)")
-        self.resize(1000, 780)
+        self.resize(1020, 800)
 
         main_layout = QVBoxLayout()
 
-        # --- BẢNG ĐIỀU KHIỂN TỐC ĐỘ & NGUỒN ÂM ---
-        group = QGroupBox("Mô phỏng tốc độ xe (CAN Bus Speed) & Nguồn âm thanh AVAS")
+        # --- BẢNG ĐIỀU KHIỂN TỐC ĐỘ & IMPORT FILE ÂM THANH ---
+        group = QGroupBox("Mô phỏng tốc độ xe (CAN Bus Speed) & Nguồn âm thanh AVAS (.WAV)")
         group_layout = QVBoxLayout()
 
+        # Hàng chọn / Import file WAV
         source_layout = QHBoxLayout()
-        source_label = QLabel("Nguồn âm AVAS:", self)
+        source_label = QLabel("File âm thanh (.wav):", self)
         source_label.setStyleSheet("font-size: 14px; font-weight: bold;")
-        self.combo_source = QComboBox(self)
-        self.combo_source.setStyleSheet("font-size: 14px; padding: 4px;")
-        self.combo_source.addItems([
-            "avas_sim_asset.wav (Kia EV6 VESS 'Spaceship V12' - Phân tích từ YouTube Short)",
-            "avas_base_asset.wav (File WAV gốc + Khử nhiễu DSP trực tiếp)",
-            "avas_base_asset.wav (File WAV gốc nguyên bản - Raw)"
+
+        self.combo_wav = QComboBox(self)
+        self.combo_wav.setStyleSheet("font-size: 14px; padding: 4px;")
+        for path in self.available_wavs:
+            self.combo_wav.addItem(self._format_wav_label(path), path)
+
+        if self.engine.current_wav_path:
+            idx = self.combo_wav.findData(self.engine.current_wav_path)
+            if idx >= 0:
+                self.combo_wav.setCurrentIndex(idx)
+
+        self.combo_wav.currentIndexChanged.connect(self.on_wav_combo_changed)
+
+        self.btn_import = QPushButton("📂 Import File .WAV...", self)
+        self.btn_import.setStyleSheet(
+            "font-size: 14px; font-weight: bold; padding: 5px 12px; "
+            "background-color: #1E88E5; color: white; border-radius: 4px;"
+        )
+        self.btn_import.clicked.connect(self.on_import_wav_clicked)
+
+        mode_label = QLabel("Chế độ DSP:", self)
+        mode_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+        self.combo_mode = QComboBox(self)
+        self.combo_mode.setStyleSheet("font-size: 14px; padding: 4px;")
+        self.combo_mode.addItems([
+            "Âm thanh gốc (Original WAV)",
+            "Làm mượt & Khử nhiễu DSP (Smooth DSP)"
         ])
-        self.combo_source.currentIndexChanged.connect(self.engine.set_sound_mode)
+        self.combo_mode.currentIndexChanged.connect(self.engine.set_sound_mode)
+
         source_layout.addWidget(source_label)
-        source_layout.addWidget(self.combo_source, 1)
+        source_layout.addWidget(self.combo_wav, 1)
+        source_layout.addWidget(self.btn_import)
+        source_layout.addSpacing(10)
+        source_layout.addWidget(mode_label)
+        source_layout.addWidget(self.combo_mode)
         group_layout.addLayout(source_layout)
 
         top_info_layout = QHBoxLayout()
@@ -405,6 +433,45 @@ class AVASSimulatorGUI(QWidget):
         main_layout.addWidget(self.rta_plot)
         self.setLayout(main_layout)
 
+    def on_wav_combo_changed(self, index):
+        if index < 0:
+            return
+        wav_path = self.combo_wav.itemData(index)
+        if wav_path and os.path.exists(wav_path):
+            try:
+                self.engine.load_wav_file(wav_path)
+                self._update_fft_grid()
+            except Exception as exc:
+                QMessageBox.critical(self, "Lỗi đọc file WAV", f"Không thể nạp file:\n{wav_path}\n\nChi tiết: {exc}")
+
+    def on_import_wav_clicked(self):
+        start_dir = os.path.dirname(self.engine.current_wav_path) if self.engine.current_wav_path else SCRIPT_DIR
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Chọn file âm thanh AVAS (.wav)",
+            start_dir,
+            "WAV Audio Files (*.wav);;All Files (*)"
+        )
+        if not file_path:
+            return
+
+        abs_path = os.path.abspath(file_path)
+        try:
+            self.engine.load_wav_file(abs_path)
+            self._update_fft_grid()
+        except Exception as exc:
+            QMessageBox.critical(self, "Lỗi nạp file WAV", f"Không thể nạp file:\n{abs_path}\n\nChi tiết: {exc}")
+            return
+
+        existing_idx = self.combo_wav.findData(abs_path)
+        self.combo_wav.blockSignals(True)
+        if existing_idx < 0:
+            self.combo_wav.addItem(self._format_wav_label(abs_path), abs_path)
+            self.combo_wav.setCurrentIndex(self.combo_wav.count() - 1)
+        else:
+            self.combo_wav.setCurrentIndex(existing_idx)
+        self.combo_wav.blockSignals(False)
+
     def on_speed_changed(self, value_int):
         speed_kmh = int(value_int)
 
@@ -464,14 +531,29 @@ class AVASSimulatorGUI(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    
-    try:
-        engine = AVASAudioEngine(INPUT_WAV, SIM_WAV)
-    except FileNotFoundError:
-        print(f"Lỗi: Không tìm thấy file '{INPUT_WAV}'. Hãy kiểm tra lại thư mục chạy!")
-        sys.exit(1)
 
-    gui = AVASSimulatorGUI(engine)
+    # Quét các file .wav có sẵn trong thư mục (Profile_Audi, Profile_Skoda, ...)
+    discovered_wavs = discover_wav_files(SCRIPT_DIR)
+
+    # Cho phép người dùng chọn file .wav ngay khi khởi động (hoặc bấm Cancel để chọn sau trong GUI)
+    selected_wav, _ = QFileDialog.getOpenFileName(
+        None,
+        "Chọn file âm thanh AVAS (.wav) để mô phỏng",
+        SCRIPT_DIR,
+        "WAV Audio Files (*.wav);;All Files (*)"
+    )
+
+    if selected_wav:
+        selected_wav = os.path.abspath(selected_wav)
+        if selected_wav not in discovered_wavs:
+            discovered_wavs.insert(0, selected_wav)
+    elif discovered_wavs:
+        selected_wav = discovered_wavs[0]
+    else:
+        selected_wav = None
+
+    engine = AVASAudioEngine(selected_wav)
+    gui = AVASSimulatorGUI(engine, discovered_wavs)
     gui.show()
 
     sys.exit(app.exec_())
