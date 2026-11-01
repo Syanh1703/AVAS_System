@@ -23,7 +23,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 BASE_FREQ = 160.0    # Tần số gốc của file WAV nền (Hz)
 MIN_FREQ = 160.0     # Tần số tại 1 km/h (Âm trầm mượt, đầm xe)
-MAX_FREQ = 256.0     # Tần số tại 20 km/h (Tương ứng tăng +60% pitch: 160 -> 256 Hz như Kia EV6 VESS)
+MAX_FREQ = 256.0     # Tần số tại 20 km/h (Tương ứng tăng +60% pitch: 160 -> 256 Hz khi tăng tốc)
 
 # 16 Dải tần số trung tâm 1/3 Octave theo Bảng 3 - ECE R138 (Hz)
 OCTAVE_CENTER_FREQS = np.array([
@@ -76,16 +76,25 @@ class AVASAudioEngine:
         default_len = self.sample_rate * 6
         self.raw_base_samples = np.zeros(default_len, dtype=np.float32)
         self.dsp_base_samples = np.zeros(default_len, dtype=np.float32)
+        self.bg_hum_samples = np.zeros(default_len, dtype=np.float32)
+        self.acc_turbine_samples = np.zeros(default_len, dtype=np.float32)
         self.base_samples = self.raw_base_samples
         self.sample_len = len(self.base_samples)
 
+        # Con trỏ đọc cho 2 lớp âm thanh:
+        # 1. bg_read_pointer : Lớp nền (Background Hum) luôn hoạt động kể cả khi xe đứng yên (Idle 0 km/h)
+        # 2. read_pointer    : Lớp tăng tốc (Acceleration Layer) được điều chỉnh pitch & âm sắc theo vận tốc
+        self.bg_read_pointer = 0.0
         self.read_pointer = 0.0
         self.current_speed_int = 0  # Số nguyên (0 - 20 km/h)
 
         # Bộ lọc làm mượt IIR (Exponential Smoothing) theo từng sample
         # Giúp triệt tiêu hoàn toàn tiếng click/lạo xạo (zipper noise) khi kéo thanh trượt
-        self.current_gain = 0.0
-        self.target_gain = 0.0
+        # Tiếng Hum nền (bg_gain = 0.45) luôn duy trì ngay cả ở trạng thái Idle 0 km/h
+        self.current_bg_gain = 0.45
+        self.target_bg_gain = 0.45
+        self.current_acc_gain = 0.0
+        self.target_acc_gain = 0.0
         self.current_pitch_ratio = 1.0
         self.target_pitch_ratio = 1.0
         self.smooth_alpha = 1.0 - np.exp(-1.0 / (0.045 * self.sample_rate))  # Hằng số thời gian ~45ms
@@ -119,7 +128,7 @@ class AVASAudioEngine:
             self.stream.start()
 
     def load_wav_file(self, wav_path):
-        """Nạp file .wav do người dùng chọn/import và cập nhật bộ đệm âm thanh trực tiếp"""
+        """Nạp file .wav do người dùng chọn/import và tách lớp Background Hum + Acceleration Layer"""
         new_sr, data = wavfile.read(wav_path)
         if len(data.shape) > 1:
             data = data[:, 0]
@@ -142,11 +151,37 @@ class AVASAudioEngine:
 
         self.raw_base_samples = raw_f32
         self.dsp_base_samples = dsp_f32
+        self.bg_read_pointer = 0.0
         self.read_pointer = 0.0
         self.set_sound_mode(self.sound_mode)
 
         if sr_changed:
             self._init_stream()
+
+    def _build_layers(self, active_source):
+        """
+        Tách tín hiệu gốc thành 2 thành phần để phần mềm điều khiển:
+        - bg_hum_samples      : Lớp âm trầm nền (Background Hum, < 280 Hz) luôn phát liên tục kể cả ở 0 km/h (Idle).
+        - acc_turbine_samples : Lớp hài âm tăng tốc (Acceleration/Turbine Layer) sẽ được phần mềm
+                                dịch tần số (pitch-shift) và tăng cường độ khi xe tăng tốc (1 -> 20 km/h).
+        """
+        n = len(active_source)
+        if n == 0:
+            z = np.zeros(1, dtype=np.float32)
+            return z, z
+
+        spec = np.fft.rfft(active_source)
+        freqs = np.fft.rfftfreq(n, 1.0 / self.sample_rate)
+
+        # Lớp Background Hum: giữ vững dải trầm - trung trầm (< 280 Hz) mượt và phẳng ở nền (kể cả khi Idle 0 km/h)
+        bg_LP = 1.0 / (1.0 + (freqs / 260.0) ** 4.0)
+        bg_sig = np.fft.irfft(spec * bg_LP, n=n)
+
+        # Lớp Acceleration: tập trung vào dải hài âm động cơ/turbine (>= 150 Hz) để quét pitch khi tăng tốc
+        acc_HP = 1.0 / (1.0 + (150.0 / np.maximum(freqs, 1.0)) ** 3.0)
+        acc_sig = np.fft.irfft(spec * acc_HP, n=n)
+
+        return bg_sig.astype(np.float32), acc_sig.astype(np.float32)
 
     def set_sound_mode(self, mode_index):
         """Chuyển đổi chế độ xử lý âm thanh mượt mà khi đang chạy (0: WAV gốc, 1: Khử nhiễu DSP)"""
@@ -156,6 +191,8 @@ class AVASAudioEngine:
         else:
             self.base_samples = self.raw_base_samples
         self.sample_len = max(len(self.base_samples), 1)
+        self.bg_hum_samples, self.acc_turbine_samples = self._build_layers(self.base_samples)
+        self.bg_read_pointer = self.bg_read_pointer % self.sample_len
         self.read_pointer = self.read_pointer % self.sample_len
 
     def _preprocess_smooth_audio(self, raw_samples):
@@ -207,37 +244,45 @@ class AVASAudioEngine:
 
     def set_speed(self, speed_kmh_int):
         self.current_speed_int = int(speed_kmh_int)
+        # Tiếng Hum nền (0.45) luôn giữ nguyên trong suốt mọi trạng thái, kể cả khi đứng yên (Idle 0 km/h)
+        self.target_bg_gain = 0.45
+
         if self.current_speed_int <= 0:
-            self.target_gain = 0.0
+            # Tại 0 km/h (Idle): Chỉ phát tiếng Hum nền ổn định, tắt dần lớp âm tăng tốc
+            self.target_acc_gain = 0.0
+            self.target_pitch_ratio = 1.0
         else:
             speed = float(self.current_speed_int)
-            target_freq = MIN_FREQ + ((speed - 1.0) / 19.0) * (MAX_FREQ - MIN_FREQ)
+            norm_speed = (speed - 1.0) / 19.0  # 0.0 tại 1 km/h -> 1.0 tại 20 km/h
+            target_freq = MIN_FREQ + norm_speed * (MAX_FREQ - MIN_FREQ)
             self.target_pitch_ratio = target_freq / BASE_FREQ
-            self.target_gain = 0.5 + (speed / 20.0) * 0.5
+
+            # Khi xe tăng tốc (1 -> 20 km/h), phần mềm đẩy lớp tăng tốc (Acceleration Layer) lên trên nền Hum
+            self.target_acc_gain = 0.25 + 0.55 * norm_speed
 
     def _audio_callback(self, outdata, frames, time, status):
-        # XỬ LÝ TRẠNG THÁI 0 KM/H: TẮT AVAS KHI ĐÃ FADE-OUT MƯỢT VỀ 0
-        if self.current_speed_int == 0 and self.current_gain < 1e-4:
-            self.current_gain = 0.0
-            outdata[:, 0] = 0.0
-            if frames < self.viz_buffer_size:
-                self.viz_buffer[:-frames] = self.viz_buffer[frames:]
-                self.viz_buffer[-frames:] = 0.0
-            else:
-                self.viz_buffer.fill(0.0)
-            return
-
-        # Làm mượt Gain và Pitch theo từng sample bằng NumPy Vectorization
+        # Làm mượt Gain (Background + Acceleration) và Pitch theo từng sample
         steps = np.arange(1, frames + 1, dtype=np.float64)
         decay = ((1.0 - self.smooth_alpha) ** steps).astype(np.float32)
-        gains = self.target_gain + (self.current_gain - self.target_gain) * decay
+
+        bg_gains = self.target_bg_gain + (self.current_bg_gain - self.target_bg_gain) * decay
+        acc_gains = self.target_acc_gain + (self.current_acc_gain - self.target_acc_gain) * decay
         pitches = self.target_pitch_ratio + (self.current_pitch_ratio - self.target_pitch_ratio) * decay
-        self.current_gain = float(gains[-1])
+
+        self.current_bg_gain = float(bg_gains[-1])
+        self.current_acc_gain = float(acc_gains[-1])
         self.current_pitch_ratio = float(pitches[-1])
 
-        # Cộng dồn pha liên tục (Phase Accumulator)
-        active_samples = self.base_samples
-        n_len = len(active_samples)
+        bg_source = self.bg_hum_samples
+        acc_source = self.acc_turbine_samples
+        n_len = len(acc_source)
+
+        # 1. LỚP NỀN (BACKGROUND HUM): Luôn giữ nguyên tần số gốc (bước nhảy = 1.0 sample) kể cả ở 0 km/h
+        bg_idx = (int(self.bg_read_pointer) + np.arange(frames, dtype=np.int64)) % n_len
+        self.bg_read_pointer = float((int(self.bg_read_pointer) + frames) % n_len)
+        bg_layer = bg_source[bg_idx] * bg_gains
+
+        # 2. LỚP TĂNG TỐC (ACCELERATION LAYER): Điều chỉnh tần số (pitch) & biên độ theo tốc độ xe
         pointers = (self.read_pointer + np.cumsum(pitches, dtype=np.float64)) % n_len
         self.read_pointer = float(pointers[-1])
 
@@ -248,17 +293,20 @@ class AVASAudioEngine:
         idx2 = (idx1 + 1) % n_len
         idx3 = (idx1 + 2) % n_len
 
-        y0 = active_samples[idx0]
-        y1 = active_samples[idx1]
-        y2 = active_samples[idx2]
-        y3 = active_samples[idx3]
+        y0 = acc_source[idx0]
+        y1 = acc_source[idx1]
+        y2 = acc_source[idx2]
+        y3 = acc_source[idx3]
 
         c1 = 0.5 * (y2 - y0)
         c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3
         c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2)
 
-        interpolated = ((c3 * frac + c2) * frac + c1) * frac + y1
-        buffer = (interpolated * gains).astype(np.float32)
+        acc_interpolated = ((c3 * frac + c2) * frac + c1) * frac + y1
+        acc_layer = acc_interpolated * acc_gains
+
+        # Tổng hợp 2 lớp: Tiếng Hum trầm luôn giữ ở nền (cả lúc Idle 0 km/h) + Tiếng vút tăng tốc
+        buffer = np.clip(bg_layer + acc_layer, -0.98, 0.98).astype(np.float32)
 
         outdata[:, 0] = buffer
         if frames < self.viz_buffer_size:
@@ -369,11 +417,11 @@ class AVASSimulatorGUI(QWidget):
         self.label_speed = QLabel("Tốc độ xe: 0 km/h", self)
         self.label_speed.setStyleSheet("font-size: 20px; font-weight: bold; color: #1E88E5;")
 
-        self.label_freq = QLabel("Trạng thái: TẮT (0 km/h)", self)
-        self.label_freq.setStyleSheet("font-size: 16px; color: #D32F2F; font-weight: bold;")
+        self.label_freq = QLabel(f"Trạng thái: IDLE (0 km/h) | Hum nền: {BASE_FREQ:.0f} Hz", self)
+        self.label_freq.setStyleSheet("font-size: 16px; color: #FB8C00; font-weight: bold;")
 
-        self.label_spl = QLabel("Overall SPL: MUTE", self)
-        self.label_spl.setStyleSheet("font-size: 20px; font-weight: bold; color: #757575;")
+        self.label_spl = QLabel("Overall SPL: -- dB(A)", self)
+        self.label_spl.setStyleSheet("font-size: 20px; font-weight: bold; color: #4CAF50;")
 
         top_info_layout.addWidget(self.label_speed)
         top_info_layout.addWidget(self.label_freq)
@@ -478,11 +526,11 @@ class AVASSimulatorGUI(QWidget):
         self.label_speed.setText(f"Tốc độ xe: {speed_kmh} km/h")
         
         if speed_kmh == 0:
-            self.label_freq.setText("Trạng thái: TẮT (0 km/h)")
-            self.label_freq.setStyleSheet("font-size: 16px; color: #D32F2F; font-weight: bold;")
+            self.label_freq.setText(f"Trạng thái: IDLE (0 km/h) | Hum nền: {BASE_FREQ:.0f} Hz")
+            self.label_freq.setStyleSheet("font-size: 16px; color: #FB8C00; font-weight: bold;")
         else:
             target_freq = MIN_FREQ + ((speed_kmh - 1) / 19.0) * (MAX_FREQ - MIN_FREQ)
-            self.label_freq.setText(f"Tần số chính (f0): {target_freq:.1f} Hz")
+            self.label_freq.setText(f"Hum nền: {BASE_FREQ:.0f} Hz | Tăng tốc (f0): {target_freq:.1f} Hz")
             self.label_freq.setStyleSheet("font-size: 16px; color: #388E3C; font-weight: bold;")
 
         self.engine.set_speed(speed_kmh)
@@ -492,15 +540,7 @@ class AVASSimulatorGUI(QWidget):
         if len(samples) < self.fft_size:
             return
 
-        # Khi 0 km/h (Mute): Đặt đồ thị phẳng về 0
-        if self.engine.current_speed_int == 0 and self.engine.current_gain < 1e-3:
-            self.fft_curve.setData(self.fft_freqs[1:], np.zeros(len(self.fft_freqs) - 1))
-            self.bar_item.setOpts(height=np.zeros(len(OCTAVE_CENTER_FREQS)))
-            self.label_spl.setText("Overall SPL: MUTE / OFF")
-            self.label_spl.setStyleSheet("font-size: 20px; font-weight: bold; color: #757575;")
-            return
-
-        # Khi xe chạy (1 - 20 km/h): Xử lý FFT & RTA
+        # Xử lý FFT & RTA liên tục (kể cả khi Idle 0 km/h để hiển thị phổ của tiếng Hum nền)
         windowed_samples = samples * self.hann_window
         fft_complex = np.fft.rfft(windowed_samples)
         magnitude = np.abs(fft_complex) / (self.fft_size / 2)
