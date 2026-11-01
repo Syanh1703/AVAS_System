@@ -9,10 +9,10 @@ from scipy.io import wavfile
 SAMPLE_RATE = 44100
 MAX_AMP = 32767 * 0.85  # Constant peak volume to prevent clipping
 
-# Output folder: Sound_Anlyze next to this script
+# Output folder: AVAS_Thanh
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_DIR = os.path.join(SCRIPT_DIR, "Sound_Anlyze")
 THANH_DIR = os.path.join(SCRIPT_DIR, "AVAS_Thanh")
+OUTPUT_DIR = THANH_DIR
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Exact UN ECE R138 Table 2 center frequencies (Hz) and their relative mix weights
@@ -170,16 +170,6 @@ def generate_similar_avas_asset(
     os.makedirs(os.path.dirname(os.path.abspath(output_wav)), exist_ok=True)
     wavfile.write(output_wav, sr, pcm_int16)
     print(f"Created Kia EV6 VESS style AVAS sound: {output_wav} ({n / sr:.1f}s)")
-
-    # Save named Kia EV6 VESS asset and Sound_Anlyze copies
-    for extra_path in [
-        os.path.join(THANH_DIR, "avas_kia_ev6_vess.wav"),
-        os.path.join(OUTPUT_DIR, "avas_sim_asset.wav"),
-        os.path.join(OUTPUT_DIR, "avas_kia_ev6_vess.wav"),
-    ]:
-        if os.path.abspath(output_wav) != os.path.abspath(extra_path):
-            shutil.copy2(output_wav, extra_path)
-            print(f"Copied Kia EV6 VESS sound to: {extra_path}")
 
 
 if __name__ == "__main__":

@@ -113,17 +113,6 @@ def generate_similar_avas_wav(ref_wav_path, out_wav_path):
     pcm_int16 = np.clip(np.round(sim_signal * 32767.0), -32768, 32767).astype(np.int16)
     wavfile.write(out_wav_path, sr, pcm_int16)
 
-    kia_named_path = os.path.join(SCRIPT_DIR, "avas_kia_ev6_vess.wav")
-    if os.path.abspath(out_wav_path) != os.path.abspath(kia_named_path):
-        shutil.copy2(out_wav_path, kia_named_path)
-
-    analyze_dir = os.path.join(os.path.dirname(SCRIPT_DIR), "Sound_Anlyze")
-    if os.path.isdir(analyze_dir):
-        for fname in ("avas_sim_asset.wav", "avas_kia_ev6_vess.wav"):
-            analyze_copy = os.path.join(analyze_dir, fname)
-            if os.path.abspath(out_wav_path) != os.path.abspath(analyze_copy):
-                shutil.copy2(out_wav_path, analyze_copy)
-
     return sim_signal.astype(np.float32)
 
 
