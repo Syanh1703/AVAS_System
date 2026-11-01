@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AVAS Real-Time Simulator - ECE R138</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 30px 15px;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #0b1120 0%, #171738 50%, #0f172a 100%);
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow-y: auto;
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 28px;
+            padding: 36px 32px;
+            width: 480px;
+            max-width: 95vw;
+            box-shadow: 0 30px 60px -15px rgba(0, 0, 0, 0.65), 0 0 40px rgba(56, 189, 248, 0.1);
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .glass-panel.reverse-mode {
+            box-shadow: 0 30px 60px -15px rgba(0, 0, 0, 0.65), 0 0 40px rgba(239, 68, 68, 0.15);
+            border-color: rgba(239, 68, 68, 0.25);
+        }
+
+        h1 {
+            font-size: 26px;
+            font-weight: 800;
+            margin: 0 0 6px 0;
+            background: linear-gradient(to right, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.5px;
+        }
+
+        .reverse-mode h1 {
+            background: linear-gradient(to right, #f87171, #fb923c);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        p.subtitle {
+            color: #94a3b8;
+            font-size: 13px;
+            margin: 0 0 24px 0;
+            font-weight: 500;
+        }
+
+        .speed-display {
+            font-size: 60px;
+            font-weight: 800;
+            margin: 10px 0 15px 0;
+            color: #38bdf8;
+            text-shadow: 0 0 24px rgba(56, 189, 248, 0.5);
+            transition: color 0.3s ease, text-shadow 0.3s ease;
+            letter-spacing: -1px;
+        }
+
+        .speed-display.reverse {
+            color: #f87171;
+            text-shadow: 0 0 24px rgba(239, 68, 68, 0.55);
+        }
+
+        .unit {
+            font-size: 20px;
+            color: #64748b;
+            font-weight: 600;
+            margin-left: 4px;
+        }
+
+        .slider-container {
+            margin: 20px 0 25px 0;
+        }
+
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+
+        input[type=range]:focus {
+            outline: none;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 24px;
+            width: 24px;
+            border-radius: 50%;
+            background: #38bdf8;
+            cursor: pointer;
+            margin-top: -8px;
+            box-shadow: 0 0 16px rgba(56, 189, 248, 0.9);
+            transition: transform 0.1s, background-color 0.3s, box-shadow 0.3s;
+        }
+        
+        input[type=range]::-webkit-slider-thumb:hover {
+            transform: scale(1.18);
+        }
+
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 8px;
+            cursor: pointer;
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 6px;
+        }
+
+        .reverse-mode input[type=range]::-webkit-slider-thumb {
+            background: #ef4444;
+            box-shadow: 0 0 16px rgba(239, 68, 68, 0.9);
+        }
+
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            margin-top: 15px;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px 14px;
+            border: 1px solid transparent;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            font-family: 'Inter', sans-serif;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+
+        button:active {
+            transform: scale(0.97);
+        }
+
+        .btn-power {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+            box-shadow: 0 4px 15px rgba(16, 185, 129, 0.35);
+        }
+
+        .btn-power.active {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);
+        }
+
+        .btn-dir {
+            background: rgba(255, 255, 255, 0.08);
+            color: #e2e8f0;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+        
+        .btn-dir.forward-active {
+            background: rgba(56, 189, 248, 0.15);
+            border: 1px solid #38bdf8;
+            color: #7dd3fc;
+        }
+
+        .btn-dir.reverse-active {
+            background: rgba(239, 68, 68, 0.2);
+            border: 1px solid #ef4444;
+            color: #fca5a5;
+        }
+
+        .btn-toggle {
+            background: rgba(255, 255, 255, 0.07);
+            color: #94a3b8;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .btn-toggle.active {
+            background: rgba(56, 189, 248, 0.18);
+            border: 1px solid #38bdf8;
+            color: #bae6fd;
+        }
+
+        .btn-honk {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            color: white;
+            box-shadow: 0 4px 15px rgba(245, 158, 11, 0.35);
+            width: 100%;
+            margin-top: 12px;
+        }
+
+        .btn-honk:active {
+            background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+        }
+
+        /* --- Dual Sound Deck Section --- */
+        .dual-deck-container {
+            margin-top: 24px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            text-align: left;
+        }
+
+        .deck-title {
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: #94a3b8;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .deck-card {
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 14px;
+            padding: 12px 14px;
+            margin-bottom: 12px;
+            transition: all 0.25s ease;
+            position: relative;
+        }
+
+        .deck-card.active-playback {
+            background: rgba(15, 23, 42, 0.7);
+            border-color: #38bdf8;
+            box-shadow: 0 0 16px rgba(56, 189, 248, 0.2);
+        }
+
+        .deck-card.reverse-card.active-playback {
+            border-color: #ef4444;
+            box-shadow: 0 0 16px rgba(239, 68, 68, 0.22);
+        }
+
+        .deck-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+
+        .deck-badge {
+            font-size: 11px;
+            font-weight: 800;
+            padding: 3px 8px;
+            border-radius: 6px;
+            letter-spacing: 0.5px;
+        }
+
+        .badge-fwd {
+            background: rgba(56, 189, 248, 0.2);
+            color: #38bdf8;
+            border: 1px solid rgba(56, 189, 248, 0.35);
+        }
+
+        .badge-rev {
+            background: rgba(239, 68, 68, 0.2);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.35);
+        }
+
+        .live-tag {
+            font-size: 10px;
+            font-weight: 700;
+            color: #10b981;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .deck-card.active-playback .live-tag {
+            opacity: 1;
+        }
+
+        .live-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #10b981;
+            box-shadow: 0 0 6px #10b981;
+            animation: pulse-dot 1.2s infinite;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.8); }
+        }
+
+        .deck-file-name {
+            font-size: 12px;
+            color: #cbd5e1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+
+        .deck-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn-deck-upload {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px dashed rgba(255, 255, 255, 0.2);
+            color: #94a3b8;
+            font-size: 11px;
+            padding: 6px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.2s;
+            display: block;
+        }
+
+        .btn-deck-upload:hover {
+            background: rgba(56, 189, 248, 0.15);
+            border-color: #38bdf8;
+            color: #38bdf8;
+        }
+
+        .btn-deck-preview {
+            flex: 0 0 auto;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 11px;
+            padding: 6px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+
+        .btn-deck-preview:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-deck-preview.auditioning {
+            background: #10b981;
+            border-color: #10b981;
+            color: black;
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
+        }
+
+        /* --- Stats Section --- */
+        .stats {
+            margin-top: 24px;
+            font-size: 12px;
+            color: #64748b;
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        
+        .stat-box {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 8px 10px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            text-align: center;
+        }
+        
+        .stat-value {
+            color: #38bdf8;
+            font-weight: 700;
+        }
+
+        .reverse-mode .stat-value {
+            color: #fca5a5;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="glass-panel" id="panel">
+        <h1>AVAS Simulator</h1>
+        <p class="subtitle">ECE R138 Forward & Reverse Dual Engine</p>
+
+        <!-- Dynamic Speed Display -->
+        <div class="speed-display" id="speedDisplayContainer">
+            <span id="speedVal">0.0</span> <span class="unit">km/h</span>
+        </div>
+
+        <!-- Acceleration Slider -->
+        <div class="slider-container">
+            <input type="range" id="speedSlider" min="0" max="20" step="0.1" value="0">
+        </div>
+
+        <!-- Primary Controls -->
+        <div class="controls">
+            <button id="btnPower" class="btn-power">START ENGINE</button>
+            <button id="btnDir" class="btn-dir forward-active">FORWARD</button>
+        </div>
+
+        <div class="controls">
+            <button id="btnTireNoise" class="btn-toggle">TIRE NOISE: OFF</button>
+        </div>
+
+        <button id="btnHonk" class="btn-honk">HONK HORN (DUAL TONE)</button>
+
+        <!-- Dual Audio Deck (Forward & Reverse) -->
+        <div class="dual-deck-container">
+            <div class="deck-title">
+                <span>Audio Slots (ECE R138)</span>
+                <span style="font-size: 11px; text-transform: none; color: #64748b;">Instant A/B Testing</span>
+            </div>
+
+            <!-- Forward Sound Deck -->
+            <div class="deck-card active-playback" id="forwardDeck">
+                <div class="deck-top">
+                    <span class="deck-badge badge-fwd">1. FORWARD SOUND</span>
+                    <span class="live-tag" id="liveTagFwd"><span class="live-dot"></span> LIVE PLAYING</span>
+                </div>
+                <div class="deck-file-name" id="fwdFileName">Preset: R138 Forward (160 - 1250 Hz)</div>
+                <div class="deck-buttons">
+                    <label for="forwardUpload" class="btn-deck-upload">Load avas_base_asset.wav</label>
+                    <input type="file" id="forwardUpload" accept="audio/*" style="display:none;">
+                    <button class="btn-deck-preview" id="btnAuditionFwd" title="Quick Audition Forward">Audition</button>
+                </div>
+            </div>
+
+            <!-- Reverse Sound Deck -->
+            <div class="deck-card reverse-card" id="reverseDeck">
+                <div class="deck-top">
+                    <span class="deck-badge badge-rev">2. REVERSE SOUND</span>
+                    <span class="live-tag" id="liveTagRev"><span class="live-dot" style="background:#f87171; box-shadow:0 0 6px #f87171;"></span> LIVE PLAYING</span>
+                </div>
+                <div class="deck-file-name" id="revFileName">Preset: Hyundai IONIQ Pulsed Chime (1.0s Cadence)</div>
+                <div class="deck-buttons">
+                    <label for="reverseUpload" class="btn-deck-upload">Load avas_reverse_asset.wav</label>
+                    <input type="file" id="reverseUpload" accept="audio/*" style="display:none;">
+                    <button class="btn-deck-preview" id="btnAuditionRev" title="Quick Audition Reverse">Audition</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Telemetry Stats -->
+        <div class="stats">
+            <div class="stat-box">Mode: <span class="stat-value" id="statMode">Forward</span></div>
+            <div class="stat-box">Pitch: <span class="stat-value" id="statFreq">Base (1.0x)</span></div>
+            <div class="stat-box">SPL: <span class="stat-value" id="statVol">Mute</span></div>
+        </div>
+    </div>
+
+    <script>
+        // --- ECE R138 Mathematical Specifications ---
+        const V_REF = 5.0;            // Minimum speed for frequency shift
+        const SHIFT_PER_KMH = 0.01;   // 1.0% shift per km/h (satisfies >= 0.8% requirement)
+
+        // Native Synthesis Frequencies (matching generate_wav.py)
+        const R138_FORWARD_COMPONENTS = [
+            { freq: 160.0, weight: 0.35 },
+            { freq: 250.0, weight: 0.22 },
+            { freq: 315.0, weight: 0.18 },
+            { freq: 400.0, weight: 0.12 },
+            { freq: 800.0, weight: 0.08 },
+            { freq: 1250.0, weight: 0.05 }
+        ];
+
+        const R138_REVERSE_COMPONENTS = [
+            { freq: 200.0, weight: 0.22 },
+            { freq: 315.0, weight: 0.35 },
+            { freq: 500.0, weight: 0.25 },
+            { freq: 630.0, weight: 0.12 },
+            { freq: 800.0, weight: 0.06 }
+        ];
+
+        // State
+        let audioCtx = null;
+        let masterGain = null;
+        let forwardBusGain = null;
+        let reverseBusGain = null;
+        let noiseGain = null;
+        let noiseSource = null;
+        let honkGain = null;
+
+        // Custom Decoded AudioBuffers
+        let customForwardBuffer = null;
+        let customReverseBuffer = null;
+        let defaultReverseBuffer = null;
+
+        // Synthesize native Hyundai IONIQ style pulsed reverse chime buffer (1.0s repeating cadence)
+        function createDefaultReverseBuffer(ctx) {
+            const sampleRate = ctx.sampleRate;
+            const duration = 6.0;
+            const numSamples = Math.floor(sampleRate * duration);
+            const buffer = ctx.createBuffer(1, numSamples, sampleRate);
+            const data = buffer.getChannelData(0);
+            const period = 1.0;
+            const pulseLen = 0.45;
+            const attack = 0.025;
+            const normTanh = Math.tanh(1.5);
+
+            for (let n = 0; n < numSamples; n++) {
+                const t = n / sampleRate;
+                const tCycle = t % period;
+                let env = 0.0;
+                if (tCycle < attack) {
+                    env = Math.pow(tCycle / attack, 1.5);
+                } else if (tCycle < pulseLen) {
+                    const progress = (tCycle - attack) / (pulseLen - attack);
+                    env = Math.exp(-progress * 3.5);
+                }
+                
+                let val = 0.0;
+                for (let i = 0; i < R138_REVERSE_COMPONENTS.length; i++) {
+                    const c = R138_REVERSE_COMPONENTS[i];
+                    val += c.weight * Math.sin(2.0 * Math.PI * c.freq * t);
+                }
+                data[n] = Math.tanh(val * env * 1.5) / normTanh;
+            }
+            return buffer;
+        }
+
+        // Active Playback Nodes
+        let forwardNodes = [];
+        let reverseNodes = [];
+
+        // Engine Driving Flags
+        let isPlaying = false;
+        let isReverse = false;
+        let isTireNoiseEnabled = false;
+
+        // Audition Solos
+        let auditionFwdActive = false;
+        let auditionRevActive = false;
+
+        // UI DOM Elements
+        const panel = document.getElementById('panel');
+        const speedSlider = document.getElementById('speedSlider');
+        const speedVal = document.getElementById('speedVal');
+        const speedDisplayContainer = document.getElementById('speedDisplayContainer');
+        const btnPower = document.getElementById('btnPower');
+        const btnDir = document.getElementById('btnDir');
+        const btnTireNoise = document.getElementById('btnTireNoise');
+        const btnHonk = document.getElementById('btnHonk');
+        const forwardDeck = document.getElementById('forwardDeck');
+        const reverseDeck = document.getElementById('reverseDeck');
+        const forwardUpload = document.getElementById('forwardUpload');
+        const reverseUpload = document.getElementById('reverseUpload');
+        const fwdFileName = document.getElementById('fwdFileName');
+        const revFileName = document.getElementById('revFileName');
+        const btnAuditionFwd = document.getElementById('btnAuditionFwd');
+        const btnAuditionRev = document.getElementById('btnAuditionRev');
+        const statMode = document.getElementById('statMode');
+        const statFreq = document.getElementById('statFreq');
+        const statVol = document.getElementById('statVol');
+
+        // Waveshaper curve for warm tanh saturation (reproducing python math.tanh)
+        function makeTanhCurve(amount) {
+            const k = amount;
+            const n_samples = 4096;
+            const curve = new Float32Array(n_samples);
+            const norm = Math.tanh(k);
+            for (let i = 0; i < n_samples; ++i) {
+                let x = (i * 2) / n_samples - 1;
+                curve[i] = Math.tanh(x * k) / norm;
+            }
+            return curve;
+        }
+
+        function initAudioContext() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // Master Bus
+                masterGain = audioCtx.createGain();
+                masterGain.connect(audioCtx.destination);
+                masterGain.gain.value = 0.0;
+
+                // Forward Channel Bus
+                forwardBusGain = audioCtx.createGain();
+                forwardBusGain.connect(masterGain);
+                forwardBusGain.gain.value = 1.0;
+
+                // Reverse Channel Bus
+                reverseBusGain = audioCtx.createGain();
+                reverseBusGain.connect(masterGain);
+                reverseBusGain.gain.value = 0.0;
+
+                // Tire Noise Bus
+                noiseGain = audioCtx.createGain();
+                noiseGain.connect(masterGain);
+                noiseGain.gain.value = 0.0;
+
+                // Setup Honk
+                honkGain = audioCtx.createGain();
+                honkGain.connect(audioCtx.destination);
+                honkGain.gain.value = 0.0;
+
+                const honkFreqs = [400, 500]; // Major 3rd interval
+                honkFreqs.forEach(f => {
+                    let osc = audioCtx.createOscillator();
+                    osc.type = 'square';
+                    osc.frequency.value = f;
+                    osc.connect(honkGain);
+                    osc.start();
+                });
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        // Build sound generators on the respective bus
+        function spawnGenerators() {
+            clearGenerators();
+
+            // 1. FORWARD GENERATOR
+            if (customForwardBuffer) {
+                let src = audioCtx.createBufferSource();
+                src.buffer = customForwardBuffer;
+                src.loop = true;
+                src.connect(forwardBusGain);
+                src.start();
+                forwardNodes.push({ type: 'buffer', node: src });
+            } else {
+                // Native ECE R138 Forward Multi-Sine Generator with tanh shaper
+                let shaper = audioCtx.createWaveShaper();
+                shaper.curve = makeTanhCurve(1.4);
+                shaper.oversample = '2x';
+                shaper.connect(forwardBusGain);
+
+                R138_FORWARD_COMPONENTS.forEach(c => {
+                    let osc = audioCtx.createOscillator();
+                    osc.type = 'sine';
+                    osc.frequency.value = c.freq;
+
+                    let g = audioCtx.createGain();
+                    g.gain.value = c.weight;
+
+                    osc.connect(g);
+                    g.connect(shaper);
+                    osc.start();
+
+                    forwardNodes.push({ type: 'osc', node: osc, baseFreq: c.freq });
+                });
+            }
+
+            // 2. REVERSE GENERATOR (Hyundai IONIQ style pulsed chime)
+            let revBuf = customReverseBuffer;
+            if (!revBuf) {
+                if (!defaultReverseBuffer) {
+                    defaultReverseBuffer = createDefaultReverseBuffer(audioCtx);
+                }
+                revBuf = defaultReverseBuffer;
+            }
+            let src = audioCtx.createBufferSource();
+            src.buffer = revBuf;
+            src.loop = true;
+            src.connect(reverseBusGain);
+            src.start();
+            reverseNodes.push({ type: 'buffer', node: src });
+
+            // 3. TIRE NOISE GENERATOR (2s loop)
+            const bufferSize = audioCtx.sampleRate * 2;
+            const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const output = noiseBuffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) {
+                output[i] = Math.random() * 2 - 1;
+            }
+            noiseSource = audioCtx.createBufferSource();
+            noiseSource.buffer = noiseBuffer;
+            noiseSource.loop = true;
+            noiseSource.connect(noiseGain);
+            noiseSource.start();
+        }
+
+        function clearGenerators() {
+            forwardNodes.forEach(item => {
+                try { item.node.stop(); } catch(e) {}
+                try { item.node.disconnect(); } catch(e) {}
+            });
+            forwardNodes = [];
+
+            reverseNodes.forEach(item => {
+                try { item.node.stop(); } catch(e) {}
+                try { item.node.disconnect(); } catch(e) {}
+            });
+            reverseNodes = [];
+
+            if (noiseSource) {
+                try { noiseSource.stop(); } catch(e) {}
+                try { noiseSource.disconnect(); } catch(e) {}
+                noiseSource = null;
+            }
+        }
+
+        function startEngine() {
+            initAudioContext();
+            spawnGenerators();
+            isPlaying = true;
+            btnPower.innerText = "STOP ENGINE";
+            btnPower.classList.add('active');
+            updateAudio();
+        }
+
+        function stopEngine() {
+            clearGenerators();
+            if (masterGain) {
+                masterGain.gain.setValueAtTime(0.0, audioCtx.currentTime);
+            }
+            isPlaying = false;
+            btnPower.innerText = "START ENGINE";
+            btnPower.classList.remove('active');
+            updateUIState();
+        }
+
+        // Calculate ECE R138 Volume Profile
+        function calculateAmplitude(speed, isRev) {
+            if (isRev) {
+                // Annex 3 §3.3.3.3: Active in reverse even at standstill (47 dB(A))
+                const target_spl = 47.0;
+                const amplitude = Math.pow(10.0, (target_spl - 56.0) / 20.0);
+                return { amplitude, spl: target_spl };
+            } else {
+                // Forward: Mute at 0 km/h (optional stationary sound §6.2.4)
+                if (speed <= 0.001) {
+                    return { amplitude: 0.0, spl: null };
+                }
+                // Forward logarithmic scale: 10 km/h = 50 dB, 20 km/h = 56 dB
+                let target_spl = 44.0 + (speed / 20.0) * 12.0;
+                if (target_spl > 56.0) target_spl = 56.0;
+                const amplitude = Math.pow(10.0, (target_spl - 56.0) / 20.0);
+                return { amplitude, spl: target_spl };
+            }
+        }
+
+        // Calculate ECE R138 Pitch Ratio
+        function calculatePitchRatio(speed, isRev) {
+            if (isRev) {
+                // Reversing is tested at constant reference speed or standstill
+                return 1.0;
+            } else {
+                // UN R138 §6.2.3.2: frequency shift >= 0.8% per km/h above 5 km/h
+                if (speed > V_REF) {
+                    return 1.0 + SHIFT_PER_KMH * (speed - V_REF);
+                }
+                return 1.0;
+            }
+        }
+
+        function updateAudio() {
+            if (!isPlaying || !audioCtx) return;
+
+            const now = audioCtx.currentTime;
+            const speed = parseFloat(speedSlider.value);
+            const pitchRatio = calculatePitchRatio(speed, isReverse);
+            const ampData = calculateAmplitude(speed, isReverse);
+
+            // Crossfade between Forward and Reverse channels
+            const fwdTarget = isReverse ? 0.0 : 1.0;
+            const revTarget = isReverse ? 1.0 : 0.0;
+            forwardBusGain.gain.setTargetAtTime(fwdTarget, now, 0.04);
+            reverseBusGain.gain.setTargetAtTime(revTarget, now, 0.04);
+
+            // Apply Master Amplitude
+            masterGain.gain.setTargetAtTime(ampData.amplitude, now, 0.05);
+
+            // Apply Tire Noise (only active when enabled and vehicle is in forward motion)
+            const tireAmp = (isTireNoiseEnabled && !isReverse) ? (speed / 20.0) * 0.04 : 0.0;
+            noiseGain.gain.setTargetAtTime(tireAmp, now, 0.05);
+
+            // Apply Pitch Scaling to Forward Channel
+            forwardNodes.forEach(item => {
+                if (item.type === 'buffer') {
+                    item.node.playbackRate.setTargetAtTime(pitchRatio, now, 0.05);
+                } else if (item.type === 'osc') {
+                    item.node.frequency.setTargetAtTime(item.baseFreq * pitchRatio, now, 0.05);
+                }
+            });
+
+            // Update Telemetry Display
+            statMode.innerText = isReverse ? "Reverse (Pulsed 47 dB)" : "Forward Drive";
+            statFreq.innerText = isReverse ? "Pulsed (1.0s Cadence)" : (pitchRatio.toFixed(3) + "x (" + ((pitchRatio - 1.0) * 100).toFixed(1) + "%)");
+            statVol.innerText = ampData.spl ? ampData.spl.toFixed(1) + " dB" : "Mute (0 km/h)";
+
+            updateUIState();
+        }
+
+        function updateUIState() {
+            const speed = parseFloat(speedSlider.value);
+            speedVal.innerText = speed.toFixed(1);
+
+            if (isReverse) {
+                panel.classList.add('reverse-mode');
+                speedDisplayContainer.classList.add('reverse');
+                btnDir.innerText = "REVERSE";
+                btnDir.className = "btn-dir reverse-active";
+                reverseDeck.classList.add('active-playback');
+                forwardDeck.classList.remove('active-playback');
+            } else {
+                panel.classList.remove('reverse-mode');
+                speedDisplayContainer.classList.remove('reverse');
+                btnDir.innerText = "FORWARD";
+                btnDir.className = "btn-dir forward-active";
+                forwardDeck.classList.add('active-playback');
+                reverseDeck.classList.remove('active-playback');
+            }
+        }
+
+        // --- File Upload Decoders ---
+        function handleFileUpload(file, isFwd) {
+            if (!file) return;
+            initAudioContext();
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                audioCtx.decodeAudioData(e.target.result, function(decodedBuffer) {
+                    if (isFwd) {
+                        customForwardBuffer = decodedBuffer;
+                        fwdFileName.innerText = "Loaded: " + file.name + " (" + (decodedBuffer.duration).toFixed(1) + "s)";
+                        fwdFileName.style.color = "#38bdf8";
+                    } else {
+                        customReverseBuffer = decodedBuffer;
+                        revFileName.innerText = "Loaded: " + file.name + " (" + (decodedBuffer.duration).toFixed(1) + "s)";
+                        revFileName.style.color = "#f87171";
+                    }
+                    if (isPlaying) {
+                        spawnGenerators();
+                        updateAudio();
+                    }
+                }, function(err) {
+                    alert("Error decoding audio file: " + err);
+                });
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        forwardUpload.addEventListener('change', (e) => handleFileUpload(e.target.files[0], true));
+        reverseUpload.addEventListener('change', (e) => handleFileUpload(e.target.files[0], false));
+
+        // --- Quick Audition Logic ---
+        function stopAudition() {
+            btnAuditionFwd.classList.remove('auditioning');
+            btnAuditionRev.classList.remove('auditioning');
+            auditionFwdActive = false;
+            auditionRevActive = false;
+        }
+
+        btnAuditionFwd.addEventListener('click', () => {
+            if (auditionFwdActive) {
+                stopEngine();
+                stopAudition();
+                return;
+            }
+            stopAudition();
+            auditionFwdActive = true;
+            btnAuditionFwd.classList.add('auditioning');
+
+            isReverse = false;
+            speedSlider.value = 10.0; // Simulate 10 km/h (50 dB)
+            startEngine();
+        });
+
+        btnAuditionRev.addEventListener('click', () => {
+            if (auditionRevActive) {
+                stopEngine();
+                stopAudition();
+                return;
+            }
+            stopAudition();
+            auditionRevActive = true;
+            btnAuditionRev.classList.add('auditioning');
+
+            isReverse = true;
+            speedSlider.value = 6.0; // Standard reverse test speed (47 dB)
+            startEngine();
+        });
+
+        // --- Controls Event Listeners ---
+        speedSlider.addEventListener('input', () => {
+            stopAudition();
+            updateAudio();
+        });
+
+        btnPower.addEventListener('click', () => {
+            stopAudition();
+            if (!isPlaying) {
+                startEngine();
+            } else {
+                stopEngine();
+            }
+        });
+
+        btnDir.addEventListener('click', () => {
+            stopAudition();
+            isReverse = !isReverse;
+            updateAudio();
+        });
+
+        btnTireNoise.addEventListener('click', () => {
+            isTireNoiseEnabled = !isTireNoiseEnabled;
+            btnTireNoise.innerText = isTireNoiseEnabled ? "TIRE NOISE: ON" : "TIRE NOISE: OFF";
+            btnTireNoise.classList.toggle('active', isTireNoiseEnabled);
+            updateAudio();
+        });
+
+        // Honk horn logic
+        function startHonk(e) {
+            if (e) e.preventDefault();
+            initAudioContext();
+            if (honkGain) {
+                honkGain.gain.setTargetAtTime(0.4, audioCtx.currentTime, 0.01);
+            }
+        }
+        function stopHonk(e) {
+            if (e) e.preventDefault();
+            if (honkGain) {
+                honkGain.gain.setTargetAtTime(0.0, audioCtx.currentTime, 0.05);
+            }
+        }
+
+        btnHonk.addEventListener('mousedown', startHonk);
+        btnHonk.addEventListener('mouseup', stopHonk);
+        btnHonk.addEventListener('mouseleave', stopHonk);
+        btnHonk.addEventListener('touchstart', startHonk, { passive: false });
+        btnHonk.addEventListener('touchend', stopHonk, { passive: false });
+
+        // Initialize UI
+        updateUIState();
+    </script>
+</body>
+</html>
