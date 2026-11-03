@@ -184,12 +184,12 @@ class AVASAudioEngine:
 
         # Bộ lọc làm mượt IIR (Exponential Smoothing) theo từng sample
         # Giúp triệt tiêu hoàn toàn tiếng click/lạo xạo (zipper noise) khi kéo thanh trượt
-        self.current_bg_gain = 0.45
-        self.target_bg_gain = 0.45
-        self.current_acc_gain = 0.0
-        self.target_acc_gain = 0.0
-        self.current_bright_gain = 0.0
-        self.target_bright_gain = 0.0
+        self.current_bg_gain = 0.50
+        self.target_bg_gain = 0.50
+        self.current_acc_gain = 0.16
+        self.target_acc_gain = 0.16
+        self.current_bright_gain = 0.05
+        self.target_bright_gain = 0.05
         self.accel_torque_boost = 0.0  # Tăng cường hài âm tức thời khi xe đang gia tốc (dv/dt > 0)
         self.current_pitch_ratio = 1.0
         self.target_pitch_ratio = 1.0
@@ -292,13 +292,20 @@ class AVASAudioEngine:
         if max_mag <= 1e-9:
             return raw_samples
 
+        # Kiểm tra xem file có bị nhiễu biến điệu bậc cao (IMD spikes như avas_base_asset.wav có > 300 vạch phổ) không.
+        # Nếu file đã sạch và phẳng sẵn (như audi_etron_forward.wav có <= 45 vạch hài âm chuẩn), giữ nguyên 100%
+        # để bảo toàn trọn vẹn cả tiếng Hum trầm lẫn hợp âm phi thuyền (Spaceship-like sound).
+        active_bins_count = int(np.sum(mag > max_mag * 1e-3))
+        if active_bins_count <= 45:
+            return raw_samples
+
         # 1. Cổng lọc phổ (Spectral Gate @ 5% max peak): Loại bỏ toàn bộ gai nhiễu nền IMD
         threshold = max_mag * 0.05
         peak_bins = np.where(mag > threshold)[0]
 
         despiked_spec = np.zeros_like(spec)
         df = self.sample_rate / float(n)
-        f_grid = BASE_FREQ / 2.0  # Lưới hài âm 80 Hz
+        f_grid = BASE_FREQ / 2.0  # Lưới hài âm 80 Hz cho file bị nhiễu IMD
         num_peaks = max(len(peak_bins), 1)
 
         for idx, k in enumerate(peak_bins):
@@ -306,8 +313,6 @@ class AVASAudioEngine:
             amp = mag[k]
 
             # 2. Chống phách (Inharmonic Beating Guard):
-            # Nếu đỉnh tần số nằm lệch nhẹ (<= 10 Hz) so với bội số của 80 Hz (ví dụ 250 Hz -> 240 Hz, 315 Hz -> 320 Hz),
-            # tự động khóa về lưới hài âm để triệt tiêu hoàn toàn gai phách 5 Hz (320 - 315 = 5 Hz).
             nearest_harmonic = round(f_orig / f_grid) * f_grid
             if abs(f_orig - nearest_harmonic) <= 10.5 and nearest_harmonic > 0:
                 f_target = nearest_harmonic
@@ -382,17 +387,19 @@ class AVASAudioEngine:
         spec = np.fft.rfft(active_source)
         freqs = np.fft.rfftfreq(n, 1.0 / self.sample_rate)
 
-        # 1. Lớp Background Hum: giữ vững dải trầm - trung trầm (< 260 Hz) mượt và phẳng ở nền
-        bg_LP = 1.0 / (1.0 + (freqs / 260.0) ** 4.0)
+        # 1. Lớp Background Hum (< 190 Hz): bộ lọc thông thấp bậc 8 cắt dứt khoát tại 190 Hz
+        #    Giữ nguyên 100% tiếng Hum trầm ấm (70, 105, 140, 175 Hz) ở nền và tuyệt đối không
+        #    chứa các tần số >= 210 Hz để triệt tiêu hoàn toàn giao thoa (spinning/beating) với lớp tăng tốc!
+        bg_LP = 1.0 / (1.0 + (freqs / 190.0) ** 8.0)
         bg_sig = np.fft.irfft(spec * bg_LP, n=n)
 
-        # 2. Lớp Acceleration Mid-Body (150 Hz - 520 Hz): thân âm động cơ chính khi tăng tốc
-        acc_HP = 1.0 / (1.0 + (150.0 / np.maximum(freqs, 1.0)) ** 3.0)
-        acc_mid_LP = 1.0 / (1.0 + (freqs / 520.0) ** 3.0)
+        # 2. Lớp Acceleration / Spaceship Mid-Body (195 Hz - 560 Hz): chỉ chứa hợp âm Spaceship (>= 210 Hz)
+        acc_HP = 1.0 / (1.0 + (195.0 / np.maximum(freqs, 1.0)) ** 8.0)
+        acc_mid_LP = 1.0 / (1.0 + (freqs / 560.0) ** 4.0)
         acc_mid_sig = np.fft.irfft(spec * acc_HP * acc_mid_LP, n=n)
 
-        # 3. Lớp Acceleration High-Turbine (380 Hz - 2400 Hz) tuyến tính hoàn toàn (không sinh gai IMD)
-        high_HP = 1.0 / (1.0 + (380.0 / np.maximum(freqs, 1.0)) ** 3.5)
+        # 3. Lớp Acceleration High-Turbine (480 Hz - 2400 Hz) tuyến tính hoàn toàn (không sinh gai IMD)
+        high_HP = 1.0 / (1.0 + (480.0 / np.maximum(freqs, 1.0)) ** 4.0)
         anti_alias_LP = 1.0 / (1.0 + (freqs / 2400.0) ** 6.0)
         high_spec = spec * high_HP * anti_alias_LP
         acc_high_sig = np.fft.irfft(high_spec, n=n)
@@ -463,13 +470,13 @@ class AVASAudioEngine:
         delta_speed = new_speed - self.current_speed_int
         self.current_speed_int = new_speed
 
-        # Tiếng Hum nền (0.45) luôn giữ nguyên trong suốt mọi trạng thái, kể cả khi đứng yên (Idle 0 km/h)
-        self.target_bg_gain = 0.45
+        # Tiếng Hum nền (0.50) luôn giữ nguyên đầy đặn trong suốt mọi trạng thái, kể cả khi đứng yên (Idle 0 km/h)
+        self.target_bg_gain = 0.50
 
         if new_speed <= 0:
-            # Tại 0 km/h (Idle): Chỉ phát tiếng Hum nền ổn định, tắt dần lớp âm tăng tốc
-            self.target_acc_gain = 0.0
-            self.target_bright_gain = 0.0
+            # Tại 0 km/h (Idle): Phát tiếng Hum nền đầy đặn + một lớp duy nhất hợp âm Spaceship nhẹ ở pitch 1.0x
+            self.target_acc_gain = 0.16
+            self.target_bright_gain = 0.05
             self.target_pitch_ratio = 1.0
         else:
             speed = float(new_speed)
